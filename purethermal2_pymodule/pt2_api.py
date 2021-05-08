@@ -10,7 +10,7 @@ from purethermal2_pymodule.uvctypes import (
     uvc_frame,
     print_device_info,
     print_device_formats,
-    uvc_get_frame_formats_by_guid
+    uvc_get_frame_formats_by_guid,
 )
 
 from purethermal2_pymodule.uvctypes import PT_USB_PID, PT_USB_VID, VS_FMT_GUID_Y16, UVC_FRAME_FORMAT_Y16
@@ -61,6 +61,7 @@ class PyPureThermal2:
         self._ctrl = uvc_stream_ctrl()
         self._open()
 
+        self._thermal_image: Optional[np.ndarray]
         self._thermal_image_colorized: Optional[np.ndarray]
         self._thermal_image_cercius: Optional[np.ndarray]
 
@@ -140,9 +141,14 @@ class PyPureThermal2:
         data = self._get_frame().copy()
         status = data is not None
         if status:
+            self._thermal_image_raw = data
             self._thermal_image_colorized = self._colorize_thermal_image(data)
             self._thermal_image_cercius = self._cvt_ktoc_ndarray(data)
         return status
+
+    @property
+    def thermal_image(self) -> Optional[np.ndarray]:
+        return self._thermal_image
 
     @property
     def thermal_image_colorized(self) -> Optional[np.ndarray]:
