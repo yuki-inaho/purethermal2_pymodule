@@ -61,7 +61,7 @@ class PyPureThermal2:
         self._ctrl = uvc_stream_ctrl()
         self._open()
 
-        self._thermal_image: Optional[np.ndarray]
+        self._thermal_image_raw: Optional[np.ndarray]
         self._thermal_image_colorized: Optional[np.ndarray]
         self._thermal_image_cercius: Optional[np.ndarray]
 
@@ -148,7 +148,7 @@ class PyPureThermal2:
 
     @property
     def thermal_image(self) -> Optional[np.ndarray]:
-        return self._thermal_image
+        return self._thermal_image_raw
 
     @property
     def thermal_image_colorized(self) -> Optional[np.ndarray]:
