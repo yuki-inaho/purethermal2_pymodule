@@ -254,7 +254,22 @@ def test_update_pulls_frame_from_queue_and_populates_properties(camera):
     assert status is True
     np.testing.assert_array_equal(camera.thermal_image, raw_frame)
     assert camera.thermal_image_colorized.shape == (120, 160, 3)
-    np.testing.assert_allclose(camera.thermal_image_cercius, np.full((120, 160), 30.0))
+    np.testing.assert_allclose(camera.thermal_image_celsius, np.full((120, 160), 30.0))
+
+
+def test_thermal_image_cercius_is_a_deprecated_alias_for_celsius(camera):
+    # `thermal_image_cercius` was a misspelling of `thermal_image_celsius`.
+    # It must keep working (existing callers depend on it) but must warn so
+    # they know to migrate.
+    camera._queue = Queue(pt2_api.PyPureThermal2._QUEUE_MAX_SIZE)
+    raw_frame = np.full((120, 160), 30315, dtype=np.uint16)  # constant 30.00C
+    camera._queue.put(raw_frame)
+    camera.update()
+
+    with pytest.deprecated_call():
+        aliased = camera.thermal_image_cercius
+
+    np.testing.assert_array_equal(aliased, camera.thermal_image_celsius)
 
 
 def test_get_frame_returns_none_on_timeout_instead_of_500s_block(camera):

@@ -2,7 +2,7 @@ from ctypes import POINTER, byref, c_void_p, cast
 
 import pytest
 
-import purethermal2_pymodule.uvctypes as uvctypes
+from purethermal2_pymodule import uvctypes
 from purethermal2_pymodule.uvctypes import (
     PT_USB_PID,
     PT_USB_VID,

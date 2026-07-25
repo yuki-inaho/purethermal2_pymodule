@@ -1,5 +1,7 @@
-import numpy as np
 from enum import Enum
+from functools import cache
+
+import numpy as np
 
 
 class ColorMapType(Enum):
@@ -2320,14 +2322,37 @@ color_map_ironblack = [
 ]
 
 
-def generate_color_map(
-    color_map_type: ColorMapType = ColorMapType.IRONBLACK,
-) -> np.ndarray:
+def _resolve_color_map_type(color_map_type) -> ColorMapType:
+    """Map any input to one of the three concrete LUTs we can build.
+
+    Mirrors ``generate_color_map()``'s legacy "unknown type -> ironblack"
+    fallback, and keeps the memoization cache below bounded to exactly 3
+    entries no matter what a caller passes in (including non-``ColorMapType``
+    values).
     """
-    Python implementation of thermal->colour LUT:
-    https://github.com/groupgets/GetThermal/blob/master/src/dataformatter.cpp#L6
+    if color_map_type == ColorMapType.GRAYSCALE:
+        return ColorMapType.GRAYSCALE
+    if color_map_type == ColorMapType.RAINBOW:
+        return ColorMapType.RAINBOW
+    return ColorMapType.IRONBLACK
+
+
+@cache
+def _generate_color_map_cached(color_map_type: ColorMapType) -> np.ndarray:
+    """Build the 256x1x3 BGR LUT for one of the three known colour maps.
+
+    This is the expensive part (a 768-element Python list comprehension
+    plus a couple of numpy conversions) - it previously ran on every single
+    captured frame via ``generate_color_map()``. The LUT is a pure function
+    of ``color_map_type`` and there are only ever 3 distinct outputs, so
+    ``functools.cache`` memoizes it: this function now runs at most once per
+    colour map type for the lifetime of the process.
+
+    The returned array is marked read-only so that a cache hit can never
+    hand out a mutable reference to the shared cached object -
+    ``generate_color_map()`` below always returns an independent writable
+    copy of it instead of this object directly.
     """
-    color_map = None
     if color_map_type == ColorMapType.GRAYSCALE:
         color_map = color_map_grayscale
     elif color_map_type == ColorMapType.RAINBOW:
@@ -2340,4 +2365,21 @@ def generate_color_map(
     )
     color_map_bgr = color_map_rgb[:, ::-1]
     color_lut = color_map_bgr[:, np.newaxis, :].astype(np.uint8)
+    color_lut.setflags(write=False)
     return color_lut
+
+
+def generate_color_map(
+    color_map_type: ColorMapType = ColorMapType.IRONBLACK,
+) -> np.ndarray:
+    """
+    Python implementation of thermal->colour LUT:
+    https://github.com/groupgets/GetThermal/blob/master/src/dataformatter.cpp#L6
+
+    The underlying LUT is generated at most once per colour map type (see
+    ``_generate_color_map_cached``); every call here returns a fresh,
+    independently-writable copy so callers can never mutate the cached
+    original out from under future callers.
+    """
+    cached_lut = _generate_color_map_cached(_resolve_color_map_type(color_map_type))
+    return cached_lut.copy()

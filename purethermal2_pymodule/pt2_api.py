@@ -1,24 +1,12 @@
-from ctypes import POINTER, byref, CFUNCTYPE, cast
-from ctypes import c_void_p, c_uint16
+import warnings
+from collections.abc import Callable
+from ctypes import CFUNCTYPE, POINTER, byref, c_uint16, c_void_p, cast
+from queue import Empty, Queue
 
-from purethermal2_pymodule.uvctypes import (
-    uvc_context,
-    uvc_device,
-    uvc_device_handle,
-    uvc_stream_ctrl,
-    uvc_frame,
-    print_device_info,
-    print_device_formats,
-    uvc_get_frame_formats_by_guid,
-)
+import cv2
+import numpy as np
 
-from purethermal2_pymodule.uvctypes import (
-    PT_USB_PID,
-    PT_USB_VID,
-    VS_FMT_GUID_Y16,
-    UVC_FRAME_FORMAT_Y16,
-)
-from purethermal2_pymodule.color_map import generate_color_map, ColorMapType
+from purethermal2_pymodule.color_map import ColorMapType, generate_color_map
 from purethermal2_pymodule.exceptions import (
     DeviceNotFoundError,
     DeviceOpenError,
@@ -27,12 +15,20 @@ from purethermal2_pymodule.exceptions import (
 )
 from purethermal2_pymodule.libuvc_loader import libuvc
 from purethermal2_pymodule.utils import get_logger_with_stdout
-from queue import Empty, Queue
-
-import cv2
-import numpy as np
-from collections.abc import Callable
-from typing import Optional
+from purethermal2_pymodule.uvctypes import (
+    PT_USB_PID,
+    PT_USB_VID,
+    UVC_FRAME_FORMAT_Y16,
+    VS_FMT_GUID_Y16,
+    print_device_formats,
+    print_device_info,
+    uvc_context,
+    uvc_device,
+    uvc_device_handle,
+    uvc_frame,
+    uvc_get_frame_formats_by_guid,
+    uvc_stream_ctrl,
+)
 
 logger = get_logger_with_stdout("PureThermal2")
 
@@ -107,9 +103,9 @@ class PyPureThermal2:
         self._streaming = False
         self._closed = False
 
-        self._thermal_image_raw: Optional[np.ndarray] = None
-        self._thermal_image_colorized: Optional[np.ndarray] = None
-        self._thermal_image_cercius: Optional[np.ndarray] = None
+        self._thermal_image_raw: np.ndarray | None = None
+        self._thermal_image_colorized: np.ndarray | None = None
+        self._thermal_image_celsius: np.ndarray | None = None
 
         # Each instance gets its own queue (no more module-global queue
         # shared - and fought over - by every PyPureThermal2 instance), and
@@ -218,9 +214,14 @@ class PyPureThermal2:
     def _colorize_thermal_image(
         self, data: np.ndarray, colour_map_type: ColorMapType = ColorMapType.IRONBLACK
     ) -> np.ndarray:
-        data_copy = data.copy()
-        data_processed = data.copy()
-        cv2.normalize(data_copy, data_processed, 0, 65535, cv2.NORM_MINMAX)
+        # Only one scratch buffer is needed: cv2.normalize() reads `data` and
+        # writes into `data_processed`, it never writes back into its source,
+        # so `data` itself can be passed directly as the source instead of
+        # copying it first. `data_processed` is allocated with
+        # np.empty_like() rather than data.copy() since its initial contents
+        # are irrelevant - cv2.normalize() overwrites all of it.
+        data_processed = np.empty_like(data)
+        cv2.normalize(data, data_processed, 0, 65535, cv2.NORM_MINMAX)
         np.right_shift(data_processed, 8, data_processed)
         image_colorized = cv2.LUT(
             cv2.cvtColor(np.uint8(data_processed), cv2.COLOR_GRAY2RGB),
@@ -228,7 +229,7 @@ class PyPureThermal2:
         )
         return image_colorized
 
-    def _get_frame(self, timeout_s: float = 0.5) -> Optional[np.ndarray]:
+    def _get_frame(self, timeout_s: float = 0.5) -> np.ndarray | None:
         """Pop the most recently queued frame, waiting up to ``timeout_s``.
 
         ``timeout_s`` is a timeout in *seconds* (``Queue.get()``'s native
@@ -259,17 +260,32 @@ class PyPureThermal2:
             return False
         self._thermal_image_raw = frame
         self._thermal_image_colorized = self._colorize_thermal_image(frame)
-        self._thermal_image_cercius = self._cvt_ktoc_ndarray(frame)
+        self._thermal_image_celsius = self._cvt_ktoc_ndarray(frame)
         return True
 
     @property
-    def thermal_image(self) -> Optional[np.ndarray]:
+    def thermal_image(self) -> np.ndarray | None:
         return self._thermal_image_raw
 
     @property
-    def thermal_image_colorized(self) -> Optional[np.ndarray]:
+    def thermal_image_colorized(self) -> np.ndarray | None:
         return self._thermal_image_colorized
 
     @property
-    def thermal_image_cercius(self) -> Optional[np.ndarray]:
-        return self._thermal_image_cercius
+    def thermal_image_celsius(self) -> np.ndarray | None:
+        return self._thermal_image_celsius
+
+    @property
+    def thermal_image_cercius(self) -> np.ndarray | None:
+        """Deprecated misspelled alias for :attr:`thermal_image_celsius`.
+
+        Kept for backwards compatibility with existing callers; new code
+        should use :attr:`thermal_image_celsius` instead.
+        """
+        warnings.warn(
+            "thermal_image_cercius is deprecated and will be removed in a "
+            "future release; use thermal_image_celsius instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.thermal_image_celsius

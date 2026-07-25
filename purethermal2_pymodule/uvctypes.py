@@ -1,12 +1,30 @@
 # https://github.com/groupgets/purethermal1-uvc-capture/blob/master/python/uvctypes.py
 
-from ctypes import *
+from ctypes import (
+    POINTER,
+    Structure,
+    byref,
+    c_char,
+    c_int,
+    c_long,
+    c_size_t,
+    c_ubyte,
+    c_uint,
+    c_uint8,
+    c_uint16,
+    c_uint32,
+    c_ulong,
+    c_ushort,
+    c_void_p,
+    create_string_buffer,
+)
+from typing import Any, ClassVar
 
 from purethermal2_pymodule.libuvc_loader import libuvc
 
 
 class uvc_context(Structure):
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, Any]]] = [
         ("usb_ctx", c_void_p),
         ("own_usb_ctx", c_uint8),
         ("open_devices", c_void_p),
@@ -16,11 +34,15 @@ class uvc_context(Structure):
 
 
 class uvc_device(Structure):
-    _fields_ = [("ctx", POINTER(uvc_context)), ("ref", c_int), ("usb_dev", c_void_p)]
+    _fields_: ClassVar[list[tuple[str, Any]]] = [
+        ("ctx", POINTER(uvc_context)),
+        ("ref", c_int),
+        ("usb_dev", c_void_p),
+    ]
 
 
 class uvc_stream_ctrl(Structure):
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, Any]]] = [
         ("bmHint", c_uint16),
         ("bFormatIndex", c_uint8),
         ("bFrameIndex", c_uint8),
@@ -113,11 +135,14 @@ uvc_format_desc._fields_ = [
 
 
 class timeval(Structure):
-    _fields_ = [("tv_sec", c_long), ("tv_usec", c_long)]
+    _fields_: ClassVar[list[tuple[str, Any]]] = [
+        ("tv_sec", c_long),
+        ("tv_usec", c_long),
+    ]
 
 
 class uvc_frame(Structure):
-    _fields_ = [  # /** Image data for this frame */
+    _fields_: ClassVar[list[tuple[str, Any]]] = [  # /** Image data for this frame */
         ("data", POINTER(c_uint8)),
         # /** Size of image data buffer */
         ("data_bytes", c_size_t),
@@ -147,7 +172,7 @@ class uvc_frame(Structure):
 
 
 class uvc_device_handle(Structure):
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, Any]]] = [
         ("dev", POINTER(uvc_device)),
         ("prev", c_void_p),
         ("next", c_void_p),
@@ -165,7 +190,7 @@ class uvc_device_handle(Structure):
 
 
 class lep_oem_sw_version(Structure):
-    _fields_ = [
+    _fields_: ClassVar[list[tuple[str, Any]]] = [
         ("gpp_major", c_ubyte),
         ("gpp_minor", c_ubyte),
         ("gpp_build", c_ubyte),
@@ -234,23 +259,17 @@ def print_device_info(devh):
     vers = lep_oem_sw_version()
     call_extension_unit(devh, OEM_UNIT_ID, 9, byref(vers), 8)
     print(
-        "Version gpp: {0}.{1}.{2} dsp: {3}.{4}.{5}".format(
-            vers.gpp_major,
-            vers.gpp_minor,
-            vers.gpp_build,
-            vers.dsp_major,
-            vers.dsp_minor,
-            vers.dsp_build,
-        )
+        f"Version gpp: {vers.gpp_major}.{vers.gpp_minor}.{vers.gpp_build} "
+        f"dsp: {vers.dsp_major}.{vers.dsp_minor}.{vers.dsp_build}"
     )
 
     flir_pn = create_string_buffer(32)
     call_extension_unit(devh, OEM_UNIT_ID, 8, flir_pn, 32)
-    print("FLIR part #: {0}".format(flir_pn.raw))
+    print(f"FLIR part #: {flir_pn.raw}")
 
     flir_sn = create_string_buffer(8)
     call_extension_unit(devh, SYS_UNIT_ID, 3, flir_sn, 8)
-    print("FLIR serial #: {0}".format(repr(flir_sn.raw)))
+    print(f"FLIR serial #: {flir_sn.raw!r}")
 
 
 def uvc_iter_formats(devh):
@@ -269,15 +288,10 @@ def uvc_iter_frames_for_format(devh, format_desc):
 
 def print_device_formats(devh):
     for format_desc in uvc_iter_formats(devh):
-        print("format: {0}".format(format_desc.guidFormat[0:4]))
+        print(f"format: {format_desc.guidFormat[0:4]}")
         for frame_desc in uvc_iter_frames_for_format(devh, format_desc):
-            print(
-                "  frame {0}x{1} @ {2}fps".format(
-                    frame_desc.wWidth,
-                    frame_desc.wHeight,
-                    int(1e7 / frame_desc.dwDefaultFrameInterval),
-                )
-            )
+            fps = int(1e7 / frame_desc.dwDefaultFrameInterval)
+            print(f"  frame {frame_desc.wWidth}x{frame_desc.wHeight} @ {fps}fps")
 
 
 def uvc_get_frame_formats_by_guid(devh, vs_fmt_guid):
