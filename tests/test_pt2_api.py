@@ -1,3 +1,6 @@
+from ctypes import POINTER, c_uint8, c_uint16, cast
+from queue import Queue
+
 import numpy as np
 import pytest
 
@@ -240,16 +243,136 @@ def test_colorize_thermal_image_does_not_mutate_input(camera):
 
 
 def test_update_pulls_frame_from_queue_and_populates_properties(camera):
+    # Each instance owns its queue now (no more module-level pt2_api.q to
+    # manually drain between tests): give this bare instance its own.
+    camera._queue = Queue(pt2_api.PyPureThermal2._QUEUE_MAX_SIZE)
     raw_frame = np.full((120, 160), 30315, dtype=np.uint16)  # constant 30.00C
-    pt2_api.q.put(raw_frame)
-    try:
-        status = camera.update()
-    finally:
-        # avoid leaking the frame into other tests sharing the module-level queue
-        while not pt2_api.q.empty():
-            pt2_api.q.get_nowait()
+    camera._queue.put(raw_frame)
+
+    status = camera.update()
 
     assert status is True
     np.testing.assert_array_equal(camera.thermal_image, raw_frame)
     assert camera.thermal_image_colorized.shape == (120, 160, 3)
     np.testing.assert_allclose(camera.thermal_image_cercius, np.full((120, 160), 30.0))
+
+
+def test_get_frame_returns_none_on_timeout_instead_of_500s_block(camera):
+    # Regression coverage: Queue.get(block, timeout) takes seconds, so the
+    # old default of 500 was an ~8.3 minute wait, not 500ms. A short,
+    # explicit timeout here must return quickly with None rather than
+    # blocking or raising queue.Empty.
+    camera._queue = Queue(2)
+    assert camera._get_frame(timeout_s=0.01) is None
+
+
+def test_update_returns_false_and_leaves_properties_untouched_when_no_frame(
+    camera, monkeypatch
+):
+    # Regression coverage: update() used to do
+    # `data = self._get_frame().copy()` and only afterwards check
+    # `data is not None` - if _get_frame() ever returned None, `.copy()`
+    # would already have raised AttributeError, so the None branch was dead
+    # code. Force _get_frame() to report "no frame" and confirm update()
+    # now handles that for real instead of blowing up.
+    camera._queue = Queue(2)
+    monkeypatch.setattr(camera, "_get_frame", lambda: None)
+    sentinel = np.zeros((1, 1), dtype=np.uint16)
+    camera._thermal_image_raw = sentinel
+
+    status = camera.update()
+
+    assert status is False
+    assert camera._thermal_image_raw is sentinel
+
+
+class _FakeFrameContents:
+    """Stand-in for a real ``uvc_frame``'s ``.contents``.
+
+    ``buf`` is the ctypes array backing the frame's pixel data - by keeping
+    a handle to it separately from ``data``, tests can mutate it after the
+    callback runs to simulate libuvc reusing/overwriting its internal frame
+    buffer for the next capture.
+    """
+
+    def __init__(self, buf, width, height, data_bytes=None):
+        self.buf = buf
+        self.width = width
+        self.height = height
+        self.data = cast(buf, POINTER(c_uint8))
+        self.data_bytes = (width * height * 2) if data_bytes is None else data_bytes
+
+
+class _FakeFrame:
+    def __init__(self, contents):
+        self.contents = contents
+
+
+def test_frame_callback_copies_data_so_reused_libuvc_buffer_cannot_corrupt_it():
+    # Regression test for the use-after-free/aliasing bug: np.frombuffer()
+    # over libuvc's frame buffer is only a VIEW. If the callback queues that
+    # view instead of a copy, mutating the underlying buffer afterwards
+    # (exactly what libuvc does when it reuses the buffer for the next
+    # frame) silently corrupts whatever is sitting in the queue. This test
+    # would fail if the callback stopped copying before queueing.
+    width, height = 4, 3
+    original_values = list(range(1, width * height + 1))
+    buf = (c_uint16 * (width * height))(*original_values)
+    frame = _FakeFrame(_FakeFrameContents(buf, width, height))
+
+    target_queue = Queue(2)
+    callback = pt2_api._make_frame_callback(target_queue)
+    callback(frame, None)
+
+    queued = target_queue.get_nowait()
+    expected = np.array(original_values, dtype=np.uint16).reshape(height, width)
+    np.testing.assert_array_equal(queued, expected)
+
+    # Simulate libuvc reusing/overwriting its internal buffer for the next
+    # captured frame, which happens for real as soon as the callback
+    # returns control to libuvc.
+    for i in range(len(buf)):
+        buf[i] = 0xDEAD
+
+    # The queued/consumed frame must still hold the original values - it
+    # must not alias libuvc's (now-overwritten) memory.
+    np.testing.assert_array_equal(queued, expected)
+
+
+def test_frame_callback_rejects_short_data_bytes_and_queues_nothing():
+    # Regression coverage: the data_bytes sanity check used to run *after*
+    # the array was already cast/reshaped, so a short/corrupt frame still
+    # paid for (and risked) building a bogus, possibly out-of-bounds view
+    # before being discarded. It must now be rejected before any view is
+    # built, and nothing should land in the queue.
+    width, height = 4, 3
+    buf = (c_uint16 * (width * height))(*range(width * height))
+    short_data_bytes = width * height * 2 - 2  # one pixel short
+    frame = _FakeFrame(_FakeFrameContents(buf, width, height, short_data_bytes))
+
+    target_queue = Queue(2)
+    callback = pt2_api._make_frame_callback(target_queue)
+    callback(frame, None)
+
+    assert target_queue.empty()
+
+
+def test_two_instances_do_not_share_frame_queue(monkeypatch, fake_frame_formats):
+    fake = FakeLibUVC()
+    monkeypatch.setattr(pt2_api, "libuvc", fake)
+
+    cam1 = PyPureThermal2()
+    cam2 = PyPureThermal2()
+    try:
+        assert cam1._queue is not cam2._queue
+        # Each instance's C callback trampoline must also be distinct (and
+        # kept alive on the instance - see the comment in __init__).
+        assert cam1._frame_callback is not cam2._frame_callback
+
+        cam1._queue.put(np.zeros((2, 2), dtype=np.uint16))
+
+        assert cam1._queue.qsize() == 1
+        assert cam2._queue.empty()
+    finally:
+        cam1.close()
+        cam2.close()
