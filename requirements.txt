@@ -1,5 +1,0 @@
-numpy
-opencv-python
-h5py
-psutil
-pytest

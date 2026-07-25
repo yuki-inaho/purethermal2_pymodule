@@ -1,0 +1,27 @@
+[project]
+name = "purethermal2-pymodule"
+version = "1.0.0"
+description = "a simple python module for purethermal2"
+authors = [
+    { name = "yuki-inaho", email = "yoshikawa@inaho.co" },
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "h5py",
+    "psutil",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["purethermal2_pymodule*"]
