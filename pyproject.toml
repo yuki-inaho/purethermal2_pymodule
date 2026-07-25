@@ -25,3 +25,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["purethermal2_pymodule*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
