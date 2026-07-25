@@ -374,11 +374,12 @@ def test_frame_callback_rejects_short_data_bytes_and_queues_nothing():
 
 
 def test_frame_callback_logs_short_frame_at_debug_before_first_complete_frame(caplog):
-    # Regression coverage: libuvc reliably delivers a handful of partial
-    # frames while the isochronous stream ramps up right after
-    # uvc_start_streaming(). That is normal startup behaviour, not a fault,
-    # so it must not be logged at WARNING (which would print on every
-    # camera open) - it should only surface at DEBUG.
+    # Regression coverage: before the first complete frame arrives, a short
+    # frame cannot be told apart from a benign stream ramp-up transient (on
+    # known-healthy hardware this generally doesn't happen at all - see the
+    # _make_frame_callback docstring), so it must not be logged at WARNING
+    # (which would print on every camera open) - it should only surface at
+    # DEBUG.
     width, height = 4, 3
     buf = (c_uint16 * (width * height))(*range(width * height))
     short_data_bytes = width * height * 2 - 2  # one pixel short
