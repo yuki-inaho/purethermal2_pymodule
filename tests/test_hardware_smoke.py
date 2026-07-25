@@ -69,3 +69,30 @@ def test_start_streaming_succeeds_on_connected_device():
             libuvc.uvc_unref_device(dev)
     finally:
         libuvc.uvc_exit(ctx)
+
+
+@pytest.mark.skipif(
+    not _purethermal_connected(),
+    reason="PureThermal/FLIR Lepton not connected over USB",
+)
+def test_pypurethermal2_context_manager_opens_streams_and_releases_device():
+    # End-to-end smoke test against real hardware: PyPureThermal2 must open
+    # the device, start streaming, and fully release the device on __exit__
+    # so a second instance can immediately reopen it (i.e. close() does not
+    # leak the USB device handle / uvc context).
+    from purethermal2_pymodule.pt2_api import PyPureThermal2
+
+    with PyPureThermal2() as cam1:
+        assert cam1._streaming is True
+        assert cam1._closed is False
+
+    assert cam1._closed is True
+    assert cam1._streaming is False
+
+    # Idempotent: closing an already-closed camera must not raise.
+    cam1.close()
+
+    # The device must be free again after close(), proving no resources
+    # (context/device ref/handle) were leaked by the first instance.
+    with PyPureThermal2() as cam2:
+        assert cam2._streaming is True

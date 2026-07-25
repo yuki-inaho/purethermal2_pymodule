@@ -1,18 +1,8 @@
 # https://github.com/groupgets/purethermal1-uvc-capture/blob/master/python/uvctypes.py
 
 from ctypes import *
-import platform
 
-try:
-    if platform.system() == "Darwin":
-        libuvc = cdll.LoadLibrary("libuvc.dylib")
-    elif platform.system() == "Linux":
-        libuvc = cdll.LoadLibrary("libuvc.so")
-    else:
-        libuvc = cdll.LoadLibrary("libuvc")
-except OSError:
-    print("Error: could not find libuvc!")
-    exit(1)
+from purethermal2_pymodule.libuvc_loader import libuvc
 
 
 class uvc_context(Structure):

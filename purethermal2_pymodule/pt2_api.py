@@ -1,5 +1,4 @@
-import platform
-from ctypes import POINTER, byref, cdll, CFUNCTYPE, cast
+from ctypes import POINTER, byref, CFUNCTYPE, cast
 from ctypes import c_void_p, c_uint16
 
 from purethermal2_pymodule.uvctypes import (
@@ -20,26 +19,21 @@ from purethermal2_pymodule.uvctypes import (
     UVC_FRAME_FORMAT_Y16,
 )
 from purethermal2_pymodule.color_map import generate_color_map, ColorMapType
+from purethermal2_pymodule.exceptions import (
+    DeviceNotFoundError,
+    DeviceOpenError,
+    StreamingError,
+    UnsupportedFormatError,
+)
+from purethermal2_pymodule.libuvc_loader import libuvc
+from purethermal2_pymodule.utils import get_logger_with_stdout
 from queue import Queue
 
 import cv2
 import numpy as np
 from typing import Optional
 
-# TODO: combine logger
-# from purethermal2_pymodule.utils import get_logger_with_stdout
-# logger = get_logger_with_stdout("PureThermal2")
-
-try:
-    if platform.system() == "Darwin":
-        libuvc = cdll.LoadLibrary("libuvc.dylib")
-    elif platform.system() == "Linux":
-        libuvc = cdll.LoadLibrary("libuvc.so")
-    else:
-        libuvc = cdll.LoadLibrary("libuvc")
-except OSError:
-    print("Error: could not find libuvc!")
-    exit(1)
+logger = get_logger_with_stdout("PureThermal2")
 
 
 def py_frame_callback(frame, userptr):
@@ -67,63 +61,103 @@ class PyPureThermal2:
         self._dev = POINTER(uvc_device)()
         self._devh = POINTER(uvc_device_handle)()
         self._ctrl = uvc_stream_ctrl()
-        self._open()
 
-        self._thermal_image_raw: Optional[np.ndarray]
-        self._thermal_image_colorized: Optional[np.ndarray]
-        self._thermal_image_cercius: Optional[np.ndarray]
+        # Resource-acquisition flags used by close() to figure out what needs
+        # to be torn down. Set as each libuvc resource is successfully
+        # acquired so close() stays correct even if __init__ raises partway
+        # through _open().
+        self._ctx_initialized = False
+        self._dev_found = False
+        self._devh_opened = False
+        self._streaming = False
+        self._closed = False
+
+        self._thermal_image_raw: Optional[np.ndarray] = None
+        self._thermal_image_colorized: Optional[np.ndarray] = None
+        self._thermal_image_cercius: Optional[np.ndarray] = None
+
+        self._open()
 
     def _open(self):
         try:
             res = libuvc.uvc_init(byref(self._ctx), 0)
             if res < 0:
-                print("uvc_init error")
-                exit(1)
+                raise DeviceNotFoundError("uvc_init failed", code=res)
+            self._ctx_initialized = True
 
             res = libuvc.uvc_find_device(
                 self._ctx, byref(self._dev), PT_USB_VID, PT_USB_PID, 0
             )
             if res < 0:
-                print("uvc_init error")
-                exit(1)
+                raise DeviceNotFoundError("no PureThermal device found", code=res)
+            self._dev_found = True
 
-            try:
-                res = libuvc.uvc_open(self._dev, byref(self._devh))
-                if res < 0:
-                    ("uvc_open error")
-                    exit(1)
-                print("device opened!")
+            res = libuvc.uvc_open(self._dev, byref(self._devh))
+            if res < 0:
+                raise DeviceOpenError("uvc_open failed", code=res)
+            self._devh_opened = True
+            logger.info("device opened!")
 
-                frame_formats = uvc_get_frame_formats_by_guid(
-                    self._devh, VS_FMT_GUID_Y16
-                )
-                if len(frame_formats) == 0:
-                    print("device does not support Y16")
-                    exit(1)
+            frame_formats = uvc_get_frame_formats_by_guid(self._devh, VS_FMT_GUID_Y16)
+            if len(frame_formats) == 0:
+                raise UnsupportedFormatError()
 
-                libuvc.uvc_get_stream_ctrl_format_size(
-                    self._devh,
-                    byref(self._ctrl),
-                    UVC_FRAME_FORMAT_Y16,
-                    frame_formats[0].wWidth,
-                    frame_formats[0].wHeight,
-                    int(1e7 / frame_formats[0].dwDefaultFrameInterval),
-                )
+            res = libuvc.uvc_get_stream_ctrl_format_size(
+                self._devh,
+                byref(self._ctrl),
+                UVC_FRAME_FORMAT_Y16,
+                frame_formats[0].wWidth,
+                frame_formats[0].wHeight,
+                int(1e7 / frame_formats[0].dwDefaultFrameInterval),
+            )
+            if res < 0:
+                raise StreamingError("uvc_get_stream_ctrl_format_size failed", code=res)
 
-                res = libuvc.uvc_start_streaming(
-                    self._devh, byref(self._ctrl), PTR_PY_FRAME_CALLBACK, None, 0
-                )
-                if res < 0:
-                    print("uvc_start_streaming failed: {0}".format(res))
-                    exit(1)
-                print("done starting stream")
+            res = libuvc.uvc_start_streaming(
+                self._devh, byref(self._ctrl), PTR_PY_FRAME_CALLBACK, None, 0
+            )
+            if res < 0:
+                raise StreamingError("uvc_start_streaming failed", code=res)
+            self._streaming = True
+            logger.info("done starting stream")
+        except Exception:
+            # Don't leak whatever we already acquired if a later step fails.
+            self.close()
+            raise
 
-            except SystemError:
-                print("Failed to Open Device")
+    def close(self):
+        """Tear down whatever libuvc resources were acquired.
 
-        except SystemError:
-            print("Failed to Find Device")
-            exit(1)
+        Safe to call on a partially-constructed instance (e.g. when _open()
+        fails partway through) and safe to call more than once.
+        """
+        if getattr(self, "_closed", False):
+            return
+
+        if getattr(self, "_streaming", False) and getattr(self, "_devh_opened", False):
+            libuvc.uvc_stop_streaming(self._devh)
+        self._streaming = False
+
+        if getattr(self, "_devh_opened", False):
+            libuvc.uvc_close(self._devh)
+        self._devh_opened = False
+
+        if getattr(self, "_dev_found", False):
+            libuvc.uvc_unref_device(self._dev)
+        self._dev_found = False
+
+        if getattr(self, "_ctx_initialized", False):
+            libuvc.uvc_exit(self._ctx)
+        self._ctx_initialized = False
+
+        self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+        return False
 
     def show_stream_info(self):
         print_device_info(self._devh)
