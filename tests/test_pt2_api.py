@@ -1,3 +1,4 @@
+import logging
 from ctypes import POINTER, c_uint8, c_uint16, cast
 from queue import Queue
 
@@ -370,6 +371,90 @@ def test_frame_callback_rejects_short_data_bytes_and_queues_nothing():
     callback(frame, None)
 
     assert target_queue.empty()
+
+
+def test_frame_callback_logs_short_frame_at_debug_before_first_complete_frame(caplog):
+    # Regression coverage: libuvc reliably delivers a handful of partial
+    # frames while the isochronous stream ramps up right after
+    # uvc_start_streaming(). That is normal startup behaviour, not a fault,
+    # so it must not be logged at WARNING (which would print on every
+    # camera open) - it should only surface at DEBUG.
+    width, height = 4, 3
+    buf = (c_uint16 * (width * height))(*range(width * height))
+    short_data_bytes = width * height * 2 - 2  # one pixel short
+    frame = _FakeFrame(_FakeFrameContents(buf, width, height, short_data_bytes))
+
+    target_queue = Queue(2)
+    callback = pt2_api._make_frame_callback(target_queue)
+
+    with caplog.at_level(logging.DEBUG, logger="PureThermal2"):
+        callback(frame, None)
+
+    assert target_queue.empty()
+    levels = [record.levelno for record in caplog.records]
+    assert logging.WARNING not in levels
+    assert logging.DEBUG in levels
+
+
+def test_frame_callback_logs_short_frame_at_warning_after_first_complete_frame(caplog):
+    # Once a complete frame has arrived, the stream is established, so a
+    # short frame afterwards is a genuine anomaly (e.g. a mid-stream USB
+    # dropout) and must remain visible at WARNING.
+    width, height = 4, 3
+    complete_buf = (c_uint16 * (width * height))(*range(width * height))
+    complete_frame = _FakeFrame(_FakeFrameContents(complete_buf, width, height))
+
+    short_buf = (c_uint16 * (width * height))(*range(width * height))
+    short_data_bytes = width * height * 2 - 2
+    short_frame = _FakeFrame(
+        _FakeFrameContents(short_buf, width, height, short_data_bytes)
+    )
+
+    target_queue = Queue(2)
+    callback = pt2_api._make_frame_callback(target_queue)
+
+    callback(complete_frame, None)  # establishes the stream
+    assert target_queue.qsize() == 1
+
+    with caplog.at_level(logging.DEBUG, logger="PureThermal2"):
+        callback(short_frame, None)
+
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warning_records) == 1
+    assert target_queue.qsize() == 1  # the short frame was still dropped
+
+
+def test_frame_callback_grace_period_is_per_instance_not_shared(caplog):
+    # Regression coverage: "has a complete frame been seen yet" must live in
+    # each callback's own closure (built fresh per PyPureThermal2 instance
+    # in __init__), not in shared/module state. Closing and reopening the
+    # camera builds a brand new callback via a fresh _make_frame_callback()
+    # call, so it must get its own fresh startup grace period instead of
+    # inheriting "already past startup" from a previous instance.
+    width, height = 4, 3
+    complete_buf = (c_uint16 * (width * height))(*range(width * height))
+    complete_frame = _FakeFrame(_FakeFrameContents(complete_buf, width, height))
+
+    short_buf = (c_uint16 * (width * height))(*range(width * height))
+    short_data_bytes = width * height * 2 - 2
+    short_frame = _FakeFrame(
+        _FakeFrameContents(short_buf, width, height, short_data_bytes)
+    )
+
+    queue_a = Queue(2)
+    callback_a = pt2_api._make_frame_callback(queue_a)
+    callback_a(complete_frame, None)  # instance A has now seen a complete frame
+
+    queue_b = Queue(2)
+    callback_b = pt2_api._make_frame_callback(queue_b)  # fresh instance B
+
+    with caplog.at_level(logging.DEBUG, logger="PureThermal2"):
+        callback_b(short_frame, None)
+
+    levels = [record.levelno for record in caplog.records]
+    assert logging.WARNING not in levels
+    assert logging.DEBUG in levels
+    assert queue_b.empty()
 
 
 def test_two_instances_do_not_share_frame_queue(monkeypatch, fake_frame_formats):

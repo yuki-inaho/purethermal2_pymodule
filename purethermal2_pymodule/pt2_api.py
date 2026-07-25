@@ -41,9 +41,27 @@ def _make_frame_callback(target_queue: Queue) -> FrameCallback:
     Each :class:`PyPureThermal2` instance gets its own callback (closing
     over that instance's ``target_queue``) instead of every instance
     fighting over one module-global queue.
+
+    The callback also closes over ``seen_complete_frame``, a per-callback
+    (i.e. per-instance - a fresh callback/closure is built for every
+    :class:`PyPureThermal2`) flag tracking whether a full, correctly-sized
+    frame has been seen yet. Immediately after ``uvc_start_streaming()``,
+    libuvc reliably delivers a handful of *partial* frames while the
+    isochronous USB transfer ramps up - empirically, clean fractions of a
+    full frame (e.g. 1/40, 1/4, 1/2 of the expected byte count) arriving in
+    the first ~0.5s. That is normal stream-startup behaviour, not a fault,
+    so those are logged at DEBUG. Once a complete frame has arrived, the
+    stream is established, and any short frame after that point is a real
+    anomaly (e.g. a USB dropout mid-stream) that must stay visible at
+    WARNING. Because the flag lives in this closure rather than on
+    ``self`` or a module global, a camera that is closed and reopened (a
+    new :class:`PyPureThermal2` instance) automatically gets its own fresh
+    grace period.
     """
+    seen_complete_frame = False
 
     def _frame_callback(frame, userptr):
+        nonlocal seen_complete_frame
         contents = frame.contents
         expected_bytes = 2 * contents.width * contents.height
         # Validate *before* building any view over the buffer: data_bytes
@@ -51,14 +69,33 @@ def _make_frame_callback(target_queue: Queue) -> FrameCallback:
         # + reshaping to the full width*height extent first would build a
         # view that reads past the end of a too-small buffer.
         if contents.data_bytes != expected_bytes:
-            logger.warning(
-                "dropping frame: expected %d bytes for %dx%d Y16 frame, got %d",
-                expected_bytes,
-                contents.width,
-                contents.height,
-                contents.data_bytes,
-            )
+            if seen_complete_frame:
+                # A complete frame already arrived, so the stream was
+                # established - a short frame now is a genuine fault, not
+                # startup noise.
+                logger.warning(
+                    "dropping frame: expected %d bytes for %dx%d Y16 frame, got %d",
+                    expected_bytes,
+                    contents.width,
+                    contents.height,
+                    contents.data_bytes,
+                )
+            else:
+                # No complete frame yet: almost certainly the normal
+                # isochronous stream ramp-up transient, so keep it quiet at
+                # DEBUG instead of alarming callers on every open().
+                logger.debug(
+                    "dropping short frame during stream startup: expected "
+                    "%d bytes for %dx%d Y16 frame, got %d (normal while the "
+                    "isochronous stream ramps up)",
+                    expected_bytes,
+                    contents.width,
+                    contents.height,
+                    contents.data_bytes,
+                )
             return
+
+        seen_complete_frame = True
 
         array_pointer = cast(
             contents.data,
@@ -83,6 +120,19 @@ def _make_frame_callback(target_queue: Queue) -> FrameCallback:
 
 
 class PyPureThermal2:
+    """ctypes/libuvc binding for a FLIR Lepton / PureThermal2 USB camera.
+
+    Note on startup: right after the device is opened, libuvc's isochronous
+    USB stream needs a brief moment (empirically well under a second) to
+    ramp up, during which it delivers a handful of undersized/partial
+    frames that are silently dropped (see :func:`_make_frame_callback`).
+    As a result, the first several calls to :meth:`update` after opening -
+    including via the ``with PyPureThermal2() as ...`` context manager -
+    can legitimately return ``False`` even though nothing is wrong.
+    Callers should loop on :meth:`update` (as :mod:`example.main` does)
+    rather than treat a single ``False`` as a failure.
+    """
+
     # Small bound on in-flight frames: the callback drops new frames rather
     # than blocking libuvc's capture thread once this many are queued.
     _QUEUE_MAX_SIZE = 2
@@ -254,6 +304,12 @@ class PyPureThermal2:
         properties were updated, or False if no frame arrived within
         _get_frame()'s timeout (in which case the properties keep whatever
         they already held).
+
+        Immediately after opening the device, the isochronous USB stream is
+        still ramping up and only delivers partial frames for a brief
+        moment, so it is normal for the first several calls to return
+        False. Callers should keep looping rather than treat one False as
+        an error - see the class docstring.
         """
         frame = self._get_frame()
         if frame is None:
