@@ -29,7 +29,10 @@ def _purethermal_connected():
         libuvc.uvc_exit(ctx)
 
 
-@pytest.mark.skipif(not _purethermal_connected(), reason="PureThermal/FLIR Lepton not connected over USB")
+@pytest.mark.skipif(
+    not _purethermal_connected(),
+    reason="PureThermal/FLIR Lepton not connected over USB",
+)
 def test_start_streaming_succeeds_on_connected_device():
     ctx = POINTER(uvc_context)()
     dev = POINTER(uvc_device)()
@@ -56,7 +59,9 @@ def test_start_streaming_succeeds_on_connected_device():
             assert res == 0
             assert ctrl.dwMaxVideoFrameSize == fmt.wWidth * fmt.wHeight * 2
 
-            res = libuvc.uvc_start_streaming(devh, byref(ctrl), cast(None, c_void_p), None, 0)
+            res = libuvc.uvc_start_streaming(
+                devh, byref(ctrl), cast(None, c_void_p), None, 0
+            )
             assert res == 0
             libuvc.uvc_stop_streaming(devh)
         finally:

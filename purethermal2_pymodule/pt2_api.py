@@ -13,7 +13,12 @@ from purethermal2_pymodule.uvctypes import (
     uvc_get_frame_formats_by_guid,
 )
 
-from purethermal2_pymodule.uvctypes import PT_USB_PID, PT_USB_VID, VS_FMT_GUID_Y16, UVC_FRAME_FORMAT_Y16
+from purethermal2_pymodule.uvctypes import (
+    PT_USB_PID,
+    PT_USB_VID,
+    VS_FMT_GUID_Y16,
+    UVC_FRAME_FORMAT_Y16,
+)
 from purethermal2_pymodule.color_map import generate_color_map, ColorMapType
 from queue import Queue
 
@@ -38,7 +43,10 @@ except OSError:
 
 
 def py_frame_callback(frame, userptr):
-    array_pointer = cast(frame.contents.data, POINTER(c_uint16 * (frame.contents.width * frame.contents.height)))
+    array_pointer = cast(
+        frame.contents.data,
+        POINTER(c_uint16 * (frame.contents.width * frame.contents.height)),
+    )
     data = np.frombuffer(array_pointer.contents, dtype=np.dtype(np.uint16)).reshape(
         frame.contents.height, frame.contents.width
     )
@@ -72,7 +80,9 @@ class PyPureThermal2:
                 print("uvc_init error")
                 exit(1)
 
-            res = libuvc.uvc_find_device(self._ctx, byref(self._dev), PT_USB_VID, PT_USB_PID, 0)
+            res = libuvc.uvc_find_device(
+                self._ctx, byref(self._dev), PT_USB_VID, PT_USB_PID, 0
+            )
             if res < 0:
                 print("uvc_init error")
                 exit(1)
@@ -84,7 +94,9 @@ class PyPureThermal2:
                     exit(1)
                 print("device opened!")
 
-                frame_formats = uvc_get_frame_formats_by_guid(self._devh, VS_FMT_GUID_Y16)
+                frame_formats = uvc_get_frame_formats_by_guid(
+                    self._devh, VS_FMT_GUID_Y16
+                )
                 if len(frame_formats) == 0:
                     print("device does not support Y16")
                     exit(1)
@@ -98,7 +110,9 @@ class PyPureThermal2:
                     int(1e7 / frame_formats[0].dwDefaultFrameInterval),
                 )
 
-                res = libuvc.uvc_start_streaming(self._devh, byref(self._ctrl), PTR_PY_FRAME_CALLBACK, None, 0)
+                res = libuvc.uvc_start_streaming(
+                    self._devh, byref(self._ctrl), PTR_PY_FRAME_CALLBACK, None, 0
+                )
                 if res < 0:
                     print("uvc_start_streaming failed: {0}".format(res))
                     exit(1)
@@ -123,7 +137,8 @@ class PyPureThermal2:
         cv2.normalize(data_copy, data_processed, 0, 65535, cv2.NORM_MINMAX)
         np.right_shift(data_processed, 8, data_processed)
         image_colorized = cv2.LUT(
-            cv2.cvtColor(np.uint8(data_processed), cv2.COLOR_GRAY2RGB), generate_color_map(colour_map_type)
+            cv2.cvtColor(np.uint8(data_processed), cv2.COLOR_GRAY2RGB),
+            generate_color_map(colour_map_type),
         )
         return image_colorized
 

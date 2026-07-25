@@ -104,7 +104,10 @@ uvc_format_desc._fields_ = [
     ("bFormatIndex", c_uint8),
     ("bNumFrameDescriptors", c_uint8),
     # /** Format specifier */
-    ("guidFormat", c_char * 16),  # union { uint8_t guidFormat[16]; uint8_t fourccFormat[4]; }
+    (
+        "guidFormat",
+        c_char * 16,
+    ),  # union { uint8_t guidFormat[16]; uint8_t fourccFormat[4]; }
     # /** Format-specific data */
     ("bBitsPerPixel", c_uint8),
     # /** Default {uvc_frame_desc} to choose given this format */
@@ -206,19 +209,33 @@ UVC_FRAME_FORMAT_RGB = 5
 UVC_FRAME_FORMAT_BGR = 6
 UVC_FRAME_FORMAT_Y16 = 10
 
-VS_FMT_GUID_GREY = create_string_buffer(b"Y8  \x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16)
+VS_FMT_GUID_GREY = create_string_buffer(
+    b"Y8  \x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16
+)
 
-VS_FMT_GUID_Y16 = create_string_buffer(b"Y16 \x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16)
+VS_FMT_GUID_Y16 = create_string_buffer(
+    b"Y16 \x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16
+)
 
-VS_FMT_GUID_YUYV = create_string_buffer(b"UYVY\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16)
+VS_FMT_GUID_YUYV = create_string_buffer(
+    b"UYVY\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16
+)
 
-VS_FMT_GUID_NV12 = create_string_buffer(b"NV12\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16)
+VS_FMT_GUID_NV12 = create_string_buffer(
+    b"NV12\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16
+)
 
-VS_FMT_GUID_YU12 = create_string_buffer(b"I420\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16)
+VS_FMT_GUID_YU12 = create_string_buffer(
+    b"I420\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16
+)
 
-VS_FMT_GUID_BGR3 = create_string_buffer(b"\x7d\xeb\x36\xe4\x4f\x52\xce\x11\x9f\x53\x00\x20\xaf\x0b\xa7\x70", 16)
+VS_FMT_GUID_BGR3 = create_string_buffer(
+    b"\x7d\xeb\x36\xe4\x4f\x52\xce\x11\x9f\x53\x00\x20\xaf\x0b\xa7\x70", 16
+)
 
-VS_FMT_GUID_RGB565 = create_string_buffer(b"RGBP\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16)
+VS_FMT_GUID_RGB565 = create_string_buffer(
+    b"RGBP\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 16
+)
 
 libuvc.uvc_get_format_descs.restype = POINTER(uvc_format_desc)
 
@@ -266,7 +283,9 @@ def print_device_formats(devh):
         for frame_desc in uvc_iter_frames_for_format(devh, format_desc):
             print(
                 "  frame {0}x{1} @ {2}fps".format(
-                    frame_desc.wWidth, frame_desc.wHeight, int(1e7 / frame_desc.dwDefaultFrameInterval)
+                    frame_desc.wWidth,
+                    frame_desc.wHeight,
+                    int(1e7 / frame_desc.dwDefaultFrameInterval),
                 )
             )
 
